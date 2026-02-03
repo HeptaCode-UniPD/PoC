@@ -3,8 +3,7 @@ services:
   mongo:
     image: mongo:6.0
     container_name: repo-mongo
-    ports:
-      - "27017:27017"
+    # Backend connects via internal network (mongodb://mongo:27017)
     volumes:
       - mongo-data:/data/db
 
@@ -24,7 +23,6 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
       AWS_REGION: ${AWS_REGION}
-      GITHUB_TOKEN: ${GITHUB_TOKEN}
 
   # --- FRONTEND (React) ---
   frontend:

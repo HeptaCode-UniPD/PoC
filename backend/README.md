@@ -1,29 +1,26 @@
 # Repo Summarizer
 
-Un backend in NestJS che analizza repository GitHub e genera riassunti tecnici usando Google Gemini AI.
+Backend in NestJS che analizza repository GitHub e genera revisioni tecniche (QA/Audit) utilizzando **AWS Bedrock (Amazon Nova Micro)**.
+
+## Caratteristiche
+- **Clonazione Ottimizzata**: Usa `git clone --depth 1` per velocizzare il download e ridurre il traffico.
+- **Context Aware**: Seleziona intelligentemente i file sorgente per riempire la finestra di contesto dell'AI senza tagliare il codice a metà.
+- **Analisi AI**: Genera report strutturati su qualità del codice, struttura e mancanze.
 
 ## Prerequisiti
 
-Assicurati di avere un file `.env` nella root del progetto con queste chiavi:
+Crea un file `.env` nella root del progetto (o passa le variabili al container Docker):
 
-GITHUB_TOKEN=tuo_token_github
-GEMINI_API_KEY=tua_chiave_google
+```env
+# Database
 MONGO_URI=mongodb://localhost/repo-summarizer
 
-# Crea e lancia il container MongoDB in background:
-docker run -d --name my-mongo -p 27017:27017 mongo
+# AWS Credentials (Richiede permessi per Bedrock:InvokeModel)
+AWS_ACCESS_KEY_ID=tuo_access_key
+AWS_SECRET_ACCESS_KEY=tuo_secret_key
+AWS_SESSION_TOKEN=opzionale_se_usate_sso
+AWS_REGION=us-east-1 (o eu-central-1 dove Nova è disponibile)
 
-# Installa le dipendenze (solo la prima volta)
-npm install
-
-# Avvia il Server in modalità watch (ascolta le modifiche ai file):
-spostati nella cartella repo-summarizer
-npm run start:dev
-
-# Esempio di richiesta POST:
-curl -X POST http://localhost:3000/repo/analyze \
-   -H "Content-Type: application/json" \
-   -d '{"repoUrl": "https://github.com/vercel/ms"}'
-
-# Esempio di richiesta GET:
-curl http://localhost:3000/repo/history
+# Configurazione App
+PORT=3000
+FRONTEND_URL=http://localhost:5173
