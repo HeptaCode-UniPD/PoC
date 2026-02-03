@@ -1,4 +1,4 @@
-import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -9,6 +9,7 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
+import { Observable } from 'rxjs';
 
 @Injectable()
 export class AppService {
@@ -21,6 +22,13 @@ export class AppService {
     @InjectModel(RepoSummary.name) private summaryModel: Model<RepoSummary>,
     private configService: ConfigService
   ) {
+
+    // --- DEBUG ---
+  const keyCheck = this.configService.get<string>('AWS_ACCESS_KEY_ID');
+  console.log("Access Key letta:", keyCheck ? "SÌ" : "NO");
+  console.log("Regione:", this.configService.get<string>('AWS_REGION'));
+  // --- FINE ---
+
     const region = this.configService.get<string>('AWS_REGION') || 'us-east-1';
     const accessKeyId = this.configService.get<string>('AWS_ACCESS_KEY_ID');
     const secretAccessKey = this.configService.get<string>('AWS_SECRET_ACCESS_KEY');
@@ -34,48 +42,68 @@ export class AppService {
     this.bedrockClient = new BedrockRuntimeClient(clientConfig);
   }
 
-  async analyzeAndSave(repoUrl: string): Promise<RepoSummary> {
-    const tempDir = path.join(os.tmpdir(), 'repo-summarizer', randomUUID());
-    console.log(`Avvio audit documentazione per: ${repoUrl} in ${tempDir}`);
+  analyzeStream(repoUrl: string): Observable<any> {
+    return new Observable((observer) => {
+      const execute = async () => {
+        const tempDir = path.join(os.tmpdir(), 'repo-summarizer', randomUUID());
+        
+        try {
+          // STEP 1: Avvio
+          observer.next({ data: { type: 'status', message: 'Avvio processo...' } });
+          console.log(`Avvio audit per: ${repoUrl}`);
 
-    try {
-      // 1. CLONE --DEPTH 1 (Per velocità e risparmio banda)
-      await fs.ensureDir(tempDir);
-      const git = simpleGit();
-      await git.clone(repoUrl, tempDir, ['--depth', '1']);
+          // STEP 2: Clonazione
+          await fs.ensureDir(tempDir);
+          const git = simpleGit();
+          observer.next({ data: { type: 'status', message: 'Clonazione repository...' } });
+          await git.clone(repoUrl, tempDir, ['--depth', '1']);
 
-      // 2. LEGGI FILE (Priorità a docs e commenti codice)
-      const combinedText = await this.readRepoFilesSmart(tempDir);
-      
-      if (!combinedText || combinedText.length < 50) {
-        throw new HttpException('Repository vuota o nessun file di documentazione/codice trovato.', HttpStatus.BAD_REQUEST);
-      }
+          // STEP 3: Lettura File
+          observer.next({ data: { type: 'status', message: 'Lettura e filtraggio file...' } });
+          const combinedText = await this.readRepoFilesSmart(tempDir);
+          
+          if (!combinedText || combinedText.length < 50) {
+            throw new Error('Repository vuota o nessun file valido trovato.');
+          }
 
-      // 3. INVOCA BEDROCK (Con prompt QA/Technical Writing)
-      const summaryText = await this.callBedrockNova(combinedText, repoUrl);
+          // STEP 4: AI
+          observer.next({ data: { type: 'status', message: 'Analisi AI, potrebbe richiedere tempo...' } });
+          const summaryText = await this.callBedrockNova(combinedText, repoUrl);
 
-      // 4. SALVA
-      const createdSummary = new this.summaryModel({
-        repoUrl: repoUrl,
-        summaryText: summaryText
-      });
+          // STEP 5: Salvataggio
+          observer.next({ data: { type: 'status', message: 'Salvataggio risultati...' } });
+          const createdSummary = new this.summaryModel({
+            repoUrl: repoUrl,
+            summaryText: summaryText
+          });
+          const savedDoc = await createdSummary.save();
 
-      return await createdSummary.save();
+          // COMPLETAMENTO: Inviamo l'oggetto finale
+          observer.next({ data: { type: 'result', payload: savedDoc } });
+          observer.complete();
 
-    } catch (e) {
-      console.error("Errore pipeline:", e);
-      throw new HttpException(
-        e.message || "Errore durante l'analisi della repository", 
-        e.status || HttpStatus.INTERNAL_SERVER_ERROR
-      );
-    } finally {
-      // 5. CLEANUP
-      try {
-        await fs.remove(tempDir);
-        console.log(`Pulizia completata: ${tempDir}`);
-      } catch (cleanupErr) {
-        console.error("Errore pulizia file temporanei:", cleanupErr);
-      }
+        } catch (e) {
+          console.error("Errore pipeline:", e);
+          // Inviamo l'errore al client via SSE
+          observer.next({ data: { type: 'error', message: e.message } });
+          observer.complete(); // Chiudiamo lo stream anche in caso di errore gestito
+        } finally {
+          try {
+            await fs.remove(tempDir);
+          } catch (cleanupErr) {
+            console.error("Errore pulizia:", cleanupErr);
+          }
+        }
+      };
+
+      execute();
+    });
+  }
+
+  async deleteSummary(id: string): Promise<void> {
+    const result = await this.summaryModel.findByIdAndDelete(id).exec();
+    if (!result) {
+      throw new NotFoundException(`Analisi con ID ${id} non trovata`);
     }
   }
 
@@ -145,36 +173,43 @@ export class AppService {
   }
 
   private async callBedrockNova(codeContext: string, repoUrl: string): Promise<string> {
-    const systemPrompt = `Sei un QA Specialist ed esperto di Technical Writing.
-Il tuo compito è eseguire una REVISIONE TECNICA (Audit) sulla documentazione fornita (file .typ, .md, txt) e sui commenti del codice per il repository ${repoUrl}.
+    const systemPrompt = `Sei un Senior Technical Writer e Developer Advocate con anni di esperienza nell'analisi di progetti Open Source.
+Il tuo compito è eseguire un **Audit Documentale Puro** del repository: ${repoUrl}.
 
-Analizza il testo fornito cercando:
-1. **Struttura**: Il documento segue un flusso logico?
-2. **Completezza**: Mancano sezioni fondamentali per il tipo di documento (es. Requisiti senza attori, Codice senza commenti)?
-3. **Chiarezza**: Ci sono ambiguità o frasi poco chiare sia nei commenti sia nella documentazione?
-4. **Errori**: Potenziali incongruenze o errori di formattazione.
+**OBIETTIVO**
+Valutare ESCLUSIVAMENTE l'adeguatezza, la chiarezza e la completezza della documentazione.
+NON giudicare la qualità tecnica del codice (clean code, performance, pattern) a meno che l'assenza di commenti non renda il codice incomprensibile.
 
-Genera un report rigoroso seguendo questo schema Markdown:
+**ISTRUZIONI DI CONTESTO (Analisi del Tipo)**
+Prima di scrivere, identifica la natura del progetto dai file (README, package.json, ecc.) per adattare i criteri di giudizio:
+1. **LIBRERIA/FRAMEWORK**: Serve documentazione API, esempi di utilizzo immediato, installazione chiara.
+2. **APP END-USER**: Servono istruzioni di deploy, configurazione (.env), architettura.
+3. **TOOL/CLI**: Serve una lista comandi, flag supportati, esempi di input/output.
 
-# 🕵️ Report di Revisione Documentale: ${repoUrl}
-**Giudizio Sintetico**: (Es. "Documentazione solida ma incompleta" o "Ben strutturata").
+Genera un report Markdown seguendo rigorosamente questo schema:
 
-## ✅ Analisi Qualitativa
-* **Struttura e Formattazione**: Valutazione dell'organizzazione del contenuto.
-* **Chiarezza Espositiva**: È comprensibile per il target di riferimento?
-* **Coerenza**: I termini usati sono uniformi?
-* **Rigore commenti**: I commenti utilizzati nel codice sono scritti in maniera consistente, utile e coerente?
+# 📄 Audit Documentazione: ${repoUrl}
+**Tipologia Progetto**: (es. "Libreria React", "Backend NestJS", ecc.)
+**Giudizio Sintetico**: Una singola frase incisiva sullo stato della documentazione.
 
-## 🚩 Criticità Rilevate
-* Elenco puntato di eventuali mancanze, errori logici, sezioni vuote o poco chiare.
-* (Se non ci sono criticità, scrivi "Nessuna criticità rilevante").
+## 🟢 Cosa Funziona 
+In questa sezione, scrivi 1 o 2 paragrafi discorsivi (NON usare elenchi puntati).
+Analizza cosa rende l'onboarding facile. Spiega *perché* la documentazione è efficace.
+*Esempio: "La documentazione eccelle nella guida introduttiva. Il README guida l'utente passo dopo passo dall'installazione al primo utilizzo senza dare nulla per scontato..."*
 
-## 💡 Suggerimenti di Miglioramento
-* Consigli pratici su cosa aggiungere o riscrivere per migliorare la qualità del documento.
+## 🔴 Cosa Manca o Non Funziona 
+In questa sezione, scrivi 1 o 2 paragrafi discorsivi (NON usare elenchi puntati).
+Argomenta le lacune che bloccherebbero un nuovo sviluppatore. Sii specifico: cita nomi di file o sezioni mancanti.
+*Esempio: "La criticità maggiore risiede nella mancanza di spiegazioni per la configurazione. Sebbene sia presente un file .env.example, non esiste una guida che spieghi dove recuperare quelle chiavi API..."*
 
-Sii costruttivo, professionale e usa l'italiano.`;
+## 🛠 Azioni Raccomandate
+Qui usa un elenco puntato sintetico per i suggerimenti pratici:
+* [Priorità Alta] Azione da fare subito (es. "Creare sezione Contributing").
+* [Priorità Media] Azione di miglioramento (es. "Aggiungere commenti JSDoc a feature X").
 
-    const userMessage = `Ecco i documenti e il codice sorgente da revisionare:\n\n${codeContext}`;
+Sii professionale, costruttivo e focalizzato sull'esperienza dello sviluppatore (DX). Usa l'italiano.`;
+
+    const userMessage = `Ecco i file di documentazione e sorgente da analizzare:\n\n${codeContext}`;
 
     const payload = {
       system: [{ text: systemPrompt }],
@@ -196,5 +231,12 @@ Sii costruttivo, professionale e usa l'italiano.`;
     const response = await this.bedrockClient.send(command);
     const responseBody = JSON.parse(new TextDecoder().decode(response.body));
     return responseBody.output.message.content[0].text;
+  }
+
+  /**
+   * Recupera tutti i riassunti dal database ordinati per data (dal più recente)
+   */
+  async getAllSummaries() {
+    return this.summaryModel.find().sort({ createdAt: -1 }).exec();
   }
 }

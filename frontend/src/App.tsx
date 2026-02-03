@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { api, Analysis } from './services/api'; // Importa il nuovo service
+import { api, API_URL, type Analysis } from './services/api'; // Importa API_URL
 import './App.css';
 
 export default function App() {
   const [history, setHistory] = useState<Analysis[]>([]);
   const [activeAnalysis, setActiveAnalysis] = useState<Analysis | null>(null);
   const [input, setInput] = useState('');
+  
+  // Stati per il caricamento granulare
   const [isProcessing, setIsProcessing] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState<string>(''); // Testo dello step corrente
 
-  // 1. CARICAMENTO STORICO VIA API SERVICE
   useEffect(() => {
     const loadHistory = async () => {
       try {
@@ -22,47 +24,85 @@ export default function App() {
     loadHistory();
   }, []);
 
-  // 2. NUOVA ANALISI VIA API SERVICE
-  const handleSubmit = async (e: React.FormEvent) => {
+  // GESTIONE STREAMING (SSE)
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isProcessing) return;
 
     setIsProcessing(true);
-    // Placeholder ottimistico
-    const tempId = Date.now().toString();
-    setActiveAnalysis({ _id: tempId, repoUrl: input, summaryText: '' });
+    setLoadingStatus('Inizializzazione connessione...');
+    
+    // Creiamo un placeholder temporaneo
+    const tempId = 'temp-' + Date.now();
+    const tempAnalysis: Analysis = { _id: tempId, repoUrl: input, summaryText: '' };
+    setActiveAnalysis(tempAnalysis);
+
+    // Apriamo la connessione SSE
+    const eventSource = new EventSource(`${API_URL}/repo/analyze/stream?url=${encodeURIComponent(input)}`);
+
+    eventSource.onmessage = (event) => {
+      const parsedData = JSON.parse(event.data);
+
+      if (parsedData.type === 'status') {
+        // Aggiorna solo il testo di stato
+        setLoadingStatus(parsedData.message);
+      } 
+      else if (parsedData.type === 'result') {
+        // Analisi completata
+        const finalAnalysis = parsedData.payload;
+        setActiveAnalysis(finalAnalysis);
+        setHistory(prev => [finalAnalysis, ...prev]);
+        setIsProcessing(false);
+        setLoadingStatus('');
+        setInput('');
+        eventSource.close(); // Chiudi connessione
+      } 
+      else if (parsedData.type === 'error') {
+        // Gestione errore dal backend
+        console.error("Errore Stream:", parsedData.message);
+        setActiveAnalysis(prev => prev ? { ...prev, summaryText: `⚠️ Errore: ${parsedData.message}` } : null);
+        setIsProcessing(false);
+        setLoadingStatus('');
+        eventSource.close();
+      }
+    };
+
+    eventSource.onerror = () => {
+        // Errore di connessione generico (es. server down)
+        if (eventSource.readyState !== EventSource.CLOSED) {
+             console.error("Errore connessione SSE");
+             setIsProcessing(false);
+             setLoadingStatus('');
+             eventSource.close();
+        }
+    };
+  };
+
+  // NUOVO: Gestione Cancellazione
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation(); // Evita di selezionare la card quando si clicca elimina
+    if (!window.confirm("Vuoi davvero eliminare questa analisi?")) return;
 
     try {
-      const newAnalysis = await api.analyzeRepo(input);
-      
-      setActiveAnalysis(newAnalysis);
-      setHistory(prev => [newAnalysis, ...prev]);
-      setInput('');
+      await api.deleteAnalysis(id);
+      setHistory(prev => prev.filter(item => item._id !== id));
+      if (activeAnalysis?._id === id) {
+        setActiveAnalysis(null);
+      }
     } catch (error) {
-      console.error(error);
-      setActiveAnalysis(prev => prev ? { 
-        ...prev, 
-        summaryText: `⚠️ Errore: ${(error as Error).message}. Verifica l'URL o le credenziali AWS.` 
-      } : null);
-    } finally {
-      setIsProcessing(false);
+      alert("Errore durante l'eliminazione");
     }
   };
 
-  // ... (Il resto del rendering rimane invariato: getRepoName, JSX sidebar, main content) ...
-  const getRepoName = (url: string) => { /* codice esistente */ 
-     try {
+  const getRepoName = (url: string) => {
+    try {
       const parts = url.split('/');
       return parts.length >= 2 ? `${parts[parts.length - 2]}/${parts[parts.length - 1]}` : url;
-    } catch {
-      return url;
-    }
+    } catch { return url; }
   };
 
   return (
-      // Assicurati solo di usare le variabili aggiornate sopra
       <div className="app-container">
-        {/* SIDEBAR */}
         <aside className="sidebar">
           <div className="sidebar-header">
             <h2 className="sidebar-title">Storico Analisi</h2>
@@ -79,21 +119,28 @@ export default function App() {
                 <div className="history-text-container">
                   <div className="repo-name">{getRepoName(item.repoUrl)}</div>
                   <div className="repo-snippet">
-                    {item.summaryText ? item.summaryText.slice(0, 60).replace(/[#*`]/g, '') + '...' : 'Caricamento...'}
+                    {item.summaryText ? item.summaryText.slice(0, 50) + '...' : 'In elaborazione...'}
                   </div>
                 </div>
+                {/* Tasto Elimina */}
+                <button 
+                  className="delete-btn"
+                  onClick={(e) => handleDelete(e, item._id)}
+                  title="Elimina"
+                >
+                  ✕
+                </button>
               </div>
             ))}
           </div>
         </aside>
   
-        {/* MAIN CONTENT */}
         <main className="main-content">
           <header className="main-header">
             <h1 className="main-title">
               {activeAnalysis ? getRepoName(activeAnalysis.repoUrl) : 'Repo Summarizer AI'}
             </h1>
-            {activeAnalysis && (
+            {activeAnalysis && !activeAnalysis._id.startsWith('temp') && (
               <a href={activeAnalysis.repoUrl} target="_blank" rel="noreferrer" className="github-link">
                 Apri su GitHub ↗
               </a>
@@ -106,8 +153,11 @@ export default function App() {
                 <p>Seleziona un'analisi dallo storico o inserisci un nuovo URL</p>
               </div>
             ) : isProcessing && !activeAnalysis.summaryText ? (
+              // STATO DI CARICAMENTO GRANULARE
               <div className="loading-state">
-                <div className="loading-badge">Clonazione e analisi AI in corso...</div>
+                <div className="loading-badge">
+                   <span className="spinner">⟳</span> {loadingStatus}
+                </div>
               </div>
             ) : (
               <div className="markdown-container">
@@ -127,7 +177,7 @@ export default function App() {
                 className="url-input"
               />
               <button type="submit" disabled={!input.trim() || isProcessing} className="submit-btn">
-                {isProcessing ? 'Analisi...' : 'Analizza'}
+                {isProcessing ? 'Attendere...' : 'Analizza'}
               </button>
             </form>
           </div>

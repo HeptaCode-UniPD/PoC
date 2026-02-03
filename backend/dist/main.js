@@ -9,7 +9,7 @@ async function bootstrap() {
     const frontendUrl = configService.get('FRONTEND_URL') ?? 'http://localhost:5173';
     app.enableCors({
         origin: frontendUrl,
-        methods: 'GET,POST',
+        methods: 'GET,POST,DELETE,PUT,PATCH',
         allowedHeaders: 'Content-Type, Authorization',
     });
     const port = configService.get('PORT') || 3000;

@@ -1,9 +1,10 @@
+import { MessageEvent } from '@nestjs/common';
 import { AppService } from './app.service';
-import { AnalyzeRepoDto } from './dto/analyze-repo.dto';
+import { Observable } from 'rxjs';
 export declare class AppController {
     private readonly appService;
     constructor(appService: AppService);
-    analyze(body: AnalyzeRepoDto): Promise<any>;
+    analyzeStream(url: string): Observable<MessageEvent>;
     getHistory(): Promise<(import("mongoose").Document<unknown, {}, import("./schemas/summary.schema").RepoSummary, {}, import("mongoose").DefaultSchemaOptions> & import("./schemas/summary.schema").RepoSummary & {
         _id: import("mongoose").Types.ObjectId;
     } & {
@@ -11,4 +12,5 @@ export declare class AppController {
     } & {
         id: string;
     })[]>;
+    deleteRepo(id: string): Promise<void>;
 }

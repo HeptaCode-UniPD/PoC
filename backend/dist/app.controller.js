@@ -15,33 +15,43 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.AppController = void 0;
 const common_1 = require("@nestjs/common");
 const app_service_1 = require("./app.service");
-const analyze_repo_dto_1 = require("./dto/analyze-repo.dto");
+const rxjs_1 = require("rxjs");
 let AppController = class AppController {
     appService;
     constructor(appService) {
         this.appService = appService;
     }
-    async analyze(body) {
-        return await this.appService.analyzeAndSave(body.repoUrl);
+    analyzeStream(url) {
+        return this.appService.analyzeStream(url);
     }
     async getHistory() {
         return await this.appService.getAllSummaries();
     }
+    async deleteRepo(id) {
+        return await this.appService.deleteSummary(id);
+    }
 };
 exports.AppController = AppController;
 __decorate([
-    (0, common_1.Post)('analyze'),
-    __param(0, (0, common_1.Body)()),
+    (0, common_1.Sse)('analyze/stream'),
+    __param(0, (0, common_1.Query)('url')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [analyze_repo_dto_1.AnalyzeRepoDto]),
-    __metadata("design:returntype", Promise)
-], AppController.prototype, "analyze", null);
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", rxjs_1.Observable)
+], AppController.prototype, "analyzeStream", null);
 __decorate([
     (0, common_1.Get)('history'),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)
 ], AppController.prototype, "getHistory", null);
+__decorate([
+    (0, common_1.Delete)(':id'),
+    __param(0, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], AppController.prototype, "deleteRepo", null);
 exports.AppController = AppController = __decorate([
     (0, common_1.Controller)('repo'),
     __metadata("design:paramtypes", [app_service_1.AppService])

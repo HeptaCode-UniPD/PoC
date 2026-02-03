@@ -271,3 +271,42 @@ body, html, #root {
   background-color: #475569;
   cursor: not-allowed;
 }
+
+.delete-btn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 1.1rem;
+  padding: 0.2rem 0.5rem;
+  margin-left: 0.5rem;
+  cursor: pointer;
+  opacity: 0; /* Nascondi di default */
+  transition: all 0.2s;
+}
+
+.delete-btn:hover {
+  color: #ef4444; /* Rosso */
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
+.history-item:hover .delete-btn {
+  opacity: 1; /* Mostra all'hover della riga */
+}
+
+/* Spinner animato */
+.spinner {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+  margin-right: 10px;
+}
+
+@keyframes spin {
+  100% { transform: rotate(360deg); }
+}
+
+/* Aggiorna loading-badge per essere più largo se serve */
+.loading-badge {
+  min-width: 300px;
+  text-align: center;
+  font-weight: 500;
+}
